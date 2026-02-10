@@ -19,7 +19,12 @@ program
 const request = program.args[0];
 const options = program.opts();
 
-const evaluation = evaluateChange(request, options.env);
+const evaluation = evaluateChange(
+  request,
+  options.env,
+  options.type
+);
+
 const auditId = recordAudit(request, options.env, evaluation);
 
 const output = {

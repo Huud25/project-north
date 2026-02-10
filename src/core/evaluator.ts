@@ -3,22 +3,28 @@ import { EvaluationResult } from "./types";
 
 export function evaluateChange(
   input: string,
-  env: string
+  env: "dev" | "staging" | "prod",
+  actionType: string
 ): EvaluationResult {
-  const result = applyPolicy(input, env);
+  const policy = applyPolicy(input, env, actionType);
 
   const next_steps =
-    result.decision === "AUTO"
+    policy.decision === "AUTO"
       ? ["execute_change", "monitor"]
-      : result.decision === "APPROVAL"
-      ? ["request_human_approval", "verify_backups", "schedule_window"]
-      : ["block_action", "escalate_to_oncall"];
+      : policy.decision === "APPROVAL"
+      ? [
+          "request_human_approval",
+          "verify_backup",
+          "confirm_change_ticket"
+        ]
+      : ["block_execution", "escalate_to_oncall"];
 
   return {
-    risk_level: result.risk,
-    decision: result.decision,
-    confidence: result.confidence,
-    reasons: result.reasons,
-    next_steps
+    risk_level: policy.riskLevel,
+    decision: policy.decision,
+    confidence: policy.confidence,
+    reasons: policy.reasons,
+    next_steps,
+    signals: policy.signals
   };
 }
