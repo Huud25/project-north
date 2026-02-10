@@ -1,90 +1,142 @@
-import { RiskLevel, Decision } from "./types";
+import { RiskLevel, Decision, RiskSignals } from "./types";
 
-interface PolicyResult {
-  risk: RiskLevel;
+interface PolicyEvaluation {
+  riskLevel: RiskLevel;
   decision: Decision;
   confidence: number;
   reasons: string[];
+  signals: RiskSignals;
 }
 
-const CRITICAL_KEYWORDS = [
-  "drop database",
-  "delete production",
-  "rm -rf",
-  "disable auth",
-  "wipe",
-  "exfiltrate",
-  "payment"
-];
-
-const HIGH_KEYWORDS = [
-  "prod deploy",
-  "production deploy",
-  "scale down prod",
-  "change firewall",
-  "rotate secrets",
-  "ssh",
-  "rbac"
-];
-
-const MEDIUM_KEYWORDS = [
-  "deploy staging",
-  "restart production",
-  "db migration"
-];
-
-export function applyPolicy(input: string, env: string): PolicyResult {
+export function applyPolicy(
+  input: string,
+  env: "dev" | "staging" | "prod",
+  actionType: string
+): PolicyEvaluation {
   const text = input.toLowerCase();
 
+  let score = 0;
   const reasons: string[] = [];
-  let confidence = 0.6;
+  const governanceMissing: string[] = [];
 
-  if (env === "prod" || env === "production") {
+  // 1) Environment
+  if (env === "prod") {
+    score += 3;
     reasons.push("production_environment");
-    confidence += 0.15;
+  } else if (env === "staging") {
+    score += 1;
+    reasons.push("staging_environment");
+  } else {
+    reasons.push("dev_environment");
   }
 
-  for (const k of CRITICAL_KEYWORDS) {
-    if (text.includes(k)) {
-      reasons.push(`critical_keyword:${k}`);
-      return {
-        risk: "CRITICAL",
-        decision: "BLOCK",
-        confidence: Math.min(confidence + 0.3, 0.95),
-        reasons
-      };
+  // 2) Action type (usa --type também, além do texto)
+  const type = (actionType || "other").toLowerCase();
+  if (type === "delete") {
+    score += 4;
+    reasons.push("action_type:delete");
+  } else if (type === "secrets") {
+    score += 3;
+    reasons.push("action_type:secrets");
+  } else if (type === "deploy") {
+    score += 2;
+    reasons.push("action_type:deploy");
+  } else if (type === "scale") {
+    score += 2;
+    reasons.push("action_type:scale");
+  } else if (type === "restart") {
+    score += 1;
+    reasons.push("action_type:restart");
+  } else {
+    reasons.push("action_type:other");
+  }
+
+  // 3) Destructive / state-changing signals by keywords
+  const destructiveKeywords = ["drop", "delete", "wipe", "format", "rm -rf"];
+  if (destructiveKeywords.some((k) => text.includes(k))) {
+    score += 4;
+    reasons.push("destructive_action_keyword");
+  }
+
+  const stateChangingKeywords = ["deploy", "migration", "rotate", "change firewall", "rbac", "disable auth"];
+  if (stateChangingKeywords.some((k) => text.includes(k))) {
+    score += 2;
+    reasons.push("state_changing_keyword");
+  }
+
+  // 4) Reversibility
+  const reversible = !destructiveKeywords.some((k) => text.includes(k)) && type !== "delete";
+  if (!reversible) {
+    score += 3;
+    reasons.push("irreversible_change");
+  }
+
+  // 5) Blast radius
+  let blastRadius: "single" | "service" | "platform" = "single";
+  if (text.includes("database") || text.includes("auth") || text.includes("rbac") || text.includes("secrets")) {
+    blastRadius = "platform";
+    score += 3;
+    reasons.push("platform_wide_impact");
+  } else if (text.includes("service") || type === "deploy" || type === "restart") {
+    blastRadius = "service";
+    score += 1;
+    reasons.push("service_level_impact");
+  }
+
+  // 6) Governance checks (simples, mas com cara enterprise)
+  if (env === "prod") {
+    const hasTicket = /chg-\d+|inc-\d+|ticket/i.test(input);
+    const hasBackup = /backup/i.test(input);
+    const hasApproval = /approved|approval|ok from/i.test(input);
+
+    if (!hasTicket) {
+      governanceMissing.push("change_ticket");
+      score += 1;
+      reasons.push("missing_change_ticket");
+    }
+    if (!hasBackup && (type === "delete" || text.includes("database") || text.includes("migration"))) {
+      governanceMissing.push("backup_verification");
+      score += 1;
+      reasons.push("missing_backup_verification");
+    }
+    if (!hasApproval && (type === "deploy" || type === "delete" || blastRadius === "platform")) {
+      governanceMissing.push("human_approval");
+      score += 1;
+      reasons.push("missing_human_approval");
     }
   }
 
-  for (const k of HIGH_KEYWORDS) {
-    if (text.includes(k)) {
-      reasons.push(`high_risk_keyword:${k}`);
-      return {
-        risk: "HIGH",
-        decision: "APPROVAL",
-        confidence: Math.min(confidence + 0.25, 0.9),
-        reasons
-      };
-    }
+  // Final decision
+  let riskLevel: RiskLevel = "LOW";
+  let decision: Decision = "AUTO";
+
+  if (score >= 10) {
+    riskLevel = "CRITICAL";
+    decision = "BLOCK";
+  } else if (score >= 7) {
+    riskLevel = "HIGH";
+    decision = "APPROVAL";
+  } else if (score >= 4) {
+    riskLevel = "MEDIUM";
+    decision = "APPROVAL";
+  } else {
+    riskLevel = "LOW";
+    decision = "AUTO";
   }
 
-  for (const k of MEDIUM_KEYWORDS) {
-    if (text.includes(k)) {
-      reasons.push(`medium_risk_keyword:${k}`);
-      return {
-        risk: "MEDIUM",
-        decision: "APPROVAL",
-        confidence: Math.min(confidence + 0.15, 0.85),
-        reasons
-      };
-    }
-  }
+  const confidence = Math.min(0.55 + score * 0.05, 0.95);
 
-  reasons.push("low_risk_default");
   return {
-    risk: "LOW",
-    decision: "AUTO",
-    confidence: Math.min(confidence, 0.8),
-    reasons
+    riskLevel,
+    decision,
+    confidence,
+    reasons,
+    signals: {
+      environment: env,
+      actionType,
+      reversible,
+      blastRadius,
+      governanceMissing
+    }
   };
 }
