@@ -119,7 +119,9 @@ export function applyPolicy(
     decision = "AUTO";
   }
 
-  const confidence = Math.min(0.55 + score * 0.05, 0.95);
+  const confidence = Number(
+    Math.min(0.55 + score * 0.05, 0.95).toFixed(2)
+  );  
 
   return {
     riskLevel,
@@ -131,7 +133,7 @@ export function applyPolicy(
       actionType,
       reversible,
       blastRadius,
-      governanceMissing
+      governanceMissing: (governanceMissing ?? []).map(String)
     }
   };
 }
