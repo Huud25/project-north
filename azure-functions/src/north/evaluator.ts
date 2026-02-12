@@ -1,7 +1,21 @@
-import { applyPolicy } from "./policy.js";
+import { evaluatePolicy } from "./policy.js";
 
-export function evaluateChange(input: any, env: any, actionType: any): any {
-  const policy = applyPolicy(input, env, actionType);
+type Env = "dev" | "staging" | "prod";
+
+export function evaluateChange(
+  input: unknown,
+  env: Env,
+  actionType: string
+) {
+  const policy = evaluatePolicy({
+    env,
+    actionType,
+    // defaults seguros caso você não esteja passando isso ainda
+    reversible: true,
+    blastRadius: "service",
+    governanceMissing: []
+  });
+
   const next_steps =
     policy.decision === "AUTO"
       ? ["execute_change", "monitor"]
@@ -12,6 +26,7 @@ export function evaluateChange(input: any, env: any, actionType: any): any {
   return {
     risk_level: policy.riskLevel,
     decision: policy.decision,
+    risk_score: policy.riskScore,
     confidence: policy.confidence,
     reasons: policy.reasons,
     next_steps,

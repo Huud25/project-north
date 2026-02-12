@@ -9,11 +9,16 @@ export type RiskSignals = {
   governanceMissing: string[];
 };
 
-export interface EvaluationResult {
-  risk_level: RiskLevel;
+export type PolicyEvaluation = {
+  riskLevel: RiskLevel;
   decision: Decision;
+
+  // 0..100 (quanto maior, mais arriscado)
+  riskScore: number;
+
+  // 0..1 (confiança do motor)
   confidence: number;
+
   reasons: string[];
-  next_steps: string[];
   signals: RiskSignals;
-}
+};

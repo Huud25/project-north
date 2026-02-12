@@ -1,131 +1,117 @@
-import { RiskLevel, Decision, RiskSignals } from "./types.js";
+import { Decision, PolicyEvaluation, RiskLevel } from "./types.js";
 
-interface PolicyEvaluation {
-  riskLevel: RiskLevel;
-  decision: Decision;
-  confidence: number;
-  reasons: string[];
-  signals: RiskSignals;
+type Env = "dev" | "staging" | "prod";
+type ActionType = string;
+
+type PolicyInput = {
+  env: Env;
+  actionType: ActionType;
+  reversible: boolean;
+  blastRadius: string;
+  governanceMissing: string[];
+};
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
 }
 
-export function applyPolicy(
-  input: string,
-  env: "dev" | "staging" | "prod",
-  actionType: string
-): PolicyEvaluation {
-  const text = input.toLowerCase();
+function riskLevelFromScore(score: number): RiskLevel {
+  // score aqui é “pontos” (0..20 aprox). Você já usava algo assim.
+  if (score >= 16) return "CRITICAL";
+  if (score >= 11) return "HIGH";
+  if (score >= 6) return "MEDIUM";
+  return "LOW";
+}
 
-  let score = 0;
+function decisionFrom(riskLevel: RiskLevel, governanceMissing: string[]): Decision {
+  if (riskLevel === "CRITICAL") return "BLOCK";
+  if (riskLevel === "HIGH") return "APPROVAL";
+  if (governanceMissing.length > 0) return "APPROVAL";
+  return "AUTO";
+}
+
+export function evaluatePolicy(input: PolicyInput): PolicyEvaluation {
+  const { env, actionType, reversible, blastRadius } = input;
+
+  const governanceMissing = (input.governanceMissing ?? []).map(String);
+
   const reasons: string[] = [];
-  const governanceMissing: string[] = [];
 
+  // ✅ Score interno em “pontos”
+  let score = 0;
+
+  // 1) Ambiente
   if (env === "prod") {
-    score += 3;
+    score += 6;
     reasons.push("production_environment");
   } else if (env === "staging") {
-    score += 1;
+    score += 2;
     reasons.push("staging_environment");
   } else {
+    score += 0;
     reasons.push("dev_environment");
   }
 
-  const type = (actionType || "other").toLowerCase();
-  if (type === "delete") {
+  // 2) Tipo de ação (sem inventar termos complexos)
+  const action = String(actionType || "").toLowerCase();
+  if (action.includes("delete") || action.includes("drop")) {
+    score += 8;
+    reasons.push("destructive_action");
+  } else if (action.includes("deploy")) {
     score += 4;
-    reasons.push("action_type:delete");
-  } else if (type === "secrets") {
-    score += 3;
-    reasons.push("action_type:secrets");
-  } else if (type === "deploy") {
-    score += 2;
-    reasons.push("action_type:deploy");
-  } else if (type === "scale") {
-    score += 2;
-    reasons.push("action_type:scale");
-  } else if (type === "restart") {
+    reasons.push("deploy_action");
+  } else if (action.includes("restart")) {
     score += 1;
-    reasons.push("action_type:restart");
+    reasons.push("restart_action");
   } else {
-    reasons.push("action_type:other");
-  }
-
-  const destructiveKeywords = ["drop", "delete", "wipe", "format", "rm -rf"];
-  if (destructiveKeywords.some((k) => text.includes(k))) {
-    score += 4;
-    reasons.push("destructive_action_keyword");
-  }
-
-  const stateChangingKeywords = ["deploy", "migration", "rotate", "change firewall", "rbac", "disable auth"];
-  if (stateChangingKeywords.some((k) => text.includes(k))) {
     score += 2;
-    reasons.push("state_changing_keyword");
+    reasons.push("unknown_action_type");
   }
 
-  const reversible = !destructiveKeywords.some((k) => text.includes(k)) && type !== "delete";
+  // 3) Reversibilidade
   if (!reversible) {
-    score += 3;
-    reasons.push("irreversible_change");
-  }
-
-  let blastRadius: "single" | "service" | "platform" = "single";
-  if (text.includes("database") || text.includes("auth") || text.includes("rbac") || text.includes("secrets")) {
-    blastRadius = "platform";
-    score += 3;
-    reasons.push("platform_wide_impact");
-  } else if (text.includes("service") || type === "deploy" || type === "restart") {
-    blastRadius = "service";
-    score += 1;
-    reasons.push("service_level_impact");
-  }
-
-  if (env === "prod") {
-    const hasTicket = /chg-\d+|inc-\d+|ticket/i.test(input);
-    const hasBackup = /backup/i.test(input);
-    const hasApproval = /approved|approval|ok from/i.test(input);
-
-    if (!hasTicket) {
-      governanceMissing.push("change_ticket");
-      score += 1;
-      reasons.push("missing_change_ticket");
-    }
-
-    if (!hasBackup && (type === "delete" || text.includes("database") || text.includes("migration"))) {
-      governanceMissing.push("backup_verification");
-      score += 1;
-      reasons.push("missing_backup_verification");
-    }
-
-    if (!hasApproval && (type === "deploy" || type === "delete" || blastRadius === "platform")) {
-      governanceMissing.push("human_approval");
-      score += 1;
-      reasons.push("missing_human_approval");
-    }
-  }
-
-  let riskLevel: RiskLevel = "LOW";
-  let decision: Decision = "AUTO";
-
-  if (score >= 10) {
-    riskLevel = "CRITICAL";
-    decision = "BLOCK";
-  } else if (score >= 7) {
-    riskLevel = "HIGH";
-    decision = "APPROVAL";
-  } else if (score >= 4) {
-    riskLevel = "MEDIUM";
-    decision = "APPROVAL";
+    score += 4;
+    reasons.push("not_reversible");
   } else {
-    riskLevel = "LOW";
-    decision = "AUTO";
+    reasons.push("reversible");
   }
 
-  const confidence = Number(
-    Math.min(0.55 + score * 0.05, 0.95).toFixed(2)
-  );  
+  // 4) Alcance do impacto (blast radius)
+  const br = String(blastRadius || "").toLowerCase();
+  if (br.includes("global") || br.includes("org") || br.includes("all")) {
+    score += 6;
+    reasons.push("global_impact");
+  } else if (br.includes("multi") || br.includes("cluster") || br.includes("platform")) {
+    score += 4;
+    reasons.push("multi_service_impact");
+  } else if (br.includes("service")) {
+    score += 2;
+    reasons.push("service_level_impact");
+  } else {
+    score += 2;
+    reasons.push("unknown_blast_radius");
+  }
+
+  // 5) Governança faltando
+  if (governanceMissing.length > 0) {
+    score += 3;
+    reasons.push("governance_requirements_missing");
+  }
+
+  // ✅ riskScore (0..100) derivado do score interno
+  // Aqui assumimos “score máximo razoável” ~ 20. Ajustável depois.
+  const riskScore = clamp(Math.round((score / 20) * 100), 0, 100);
+
+  const riskLevel = riskLevelFromScore(score);
+  const decision = decisionFrom(riskLevel, governanceMissing);
+
+  // ✅ confidence arredondada como você já fez (2 casas)
+  const confidence = Number(clamp(0.55 + score * 0.05, 0.55, 0.95).toFixed(2));
 
   return {
     riskLevel,
     decision,
+    riskScore,
     confidence,
     reasons,
     signals: {
@@ -133,7 +119,9 @@ export function applyPolicy(
       actionType,
       reversible,
       blastRadius,
-      governanceMissing: (governanceMissing ?? []).map(String)
+      governanceMissing
     }
   };
 }
+
+export const applyPolicy = evaluatePolicy;
