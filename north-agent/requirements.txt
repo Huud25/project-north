@@ -1,0 +1,10 @@
+agent-framework --pre
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+azure-identity
+pydantic
+
+# FIX: evita AttributeError SpanAttributes.LLM_SYSTEM
+opentelemetry-semantic-conventions-ai==0.4.13

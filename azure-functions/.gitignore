@@ -1,61 +1,36 @@
-bin/
-**/bin/
-!Modules/**
-obj
-csx
-.vs
-edge
-Publish
+# Node
+node_modules/
+dist/
 
-*.user
-*.suo
-*.cscfg
-*.Cache
-project.lock.json
-
-/packages
-/TestResults
-
-/tools/NuGet.exe
-/App_Data
-/secrets
-/data
-.secrets
-appsettings.json
-local.settings.json
-
-node_modules
-dist
-
-# Local python packages
-.python_packages/
-
-# Python Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Azurite artifacts
-__blobstorage__
-__queuestorage__
-__azurite_db*__.json
-
-# Azurite local files
-azure-functions/.azurite/
-
-# Azurite (ignore in any folder)
+# Azure local
 .azurite/
-**/.azurite/
-**/.azurite/**
-
-# Azurite logs
 *.log
+azure-functions/local.settings.json
+
+# Python
+north-agent/.venv/
+north-agent/__pycache__/
+north-agent/**/*.pyc
+north-agent/.env
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# secrets
+north-agent/.env
+azure-functions/local.settings.json
+
+# python cache
+__pycache__/
+*.pyc
+
+# local emulators
+.azurite/
+*.log
+
+# vscode
+.vscode/
