@@ -8,10 +8,9 @@ export type NorthPolicyInput = {
   env: Environment;
   actionType: ActionType;
   reversible: boolean;
-  blastRadius: number; // 0..10 (recomendado), mas aceitamos qualquer number e clampamos no motor
+  blastRadius: number;
   governanceMissing: boolean;
 
-  // Permite evolução sem quebrar input (fields extras ignorados pela policy)
   [k: string]: unknown;
 };
 
@@ -23,6 +22,8 @@ export type NorthPolicyResult = {
   decision: NorthPolicyDecision;
 
   confidence: number; // 0..1
+  summary: string; // ✅ novo: explicação executiva determinística
+
   reasons: string[];
 
   signals: Array<{
