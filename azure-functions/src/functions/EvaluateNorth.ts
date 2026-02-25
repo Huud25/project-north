@@ -1,60 +1,49 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
-import { evaluateChange } from "../north/evaluator.js";
-import { recordAuditToBlob } from "../north/audit.js";
+import { evaluateNorth } from "../north/evaluator.js";
 
-type Env = "dev" | "staging" | "prod";
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
 
-type ReqBody = {
-  request?: string;
-  env?: Env;
-  type?: string;
-};
-
-export async function EvaluateNorthHttp(
-  req: HttpRequest,
+export async function EvaluateNorth(
+  request: HttpRequest,
   context: InvocationContext
 ): Promise<HttpResponseInit> {
   try {
-    const body = (await req.json().catch(() => ({}))) as ReqBody;
-
-    const requestText = body.request || req.query.get("request") || "";
-    const env = (body.env || (req.query.get("env") as Env) || "dev") as Env;
-    const type = body.type || req.query.get("type") || "other";
-
-    if (!requestText.trim()) {
-      return {
-        status: 400,
-        jsonBody: { error: "Missing 'request' (JSON body or querystring)" }
-      };
+    // Body (unknown -> Record)
+    let body: Record<string, unknown> = {};
+    try {
+      const raw = await request.json();
+      body = isPlainObject(raw) ? raw : {};
+    } catch {
+      body = {};
     }
 
-    const evaluation = evaluateChange(requestText, env, type);
-
-    const audit = await recordAuditToBlob({
-      input: requestText,
-      env: env as unknown as Record<string, unknown>,
-      actionType: type,
-      evaluation
+    // Query params -> Record
+    const query: Record<string, unknown> = {};
+    request.query.forEach((value, key) => {
+      query[key] = value;
     });
+
+    const input: Record<string, unknown> = {
+      ...query,
+      ...body
+    };
+
+    const result = evaluateNorth(input);
 
     return {
       status: 200,
-      jsonBody: {
-        ...evaluation,
-        audit_id: audit.auditId,
-        audit_blob: audit.blobName,
-        request: requestText,
-        environment: env,
-        type
-      }
+      jsonBody: result
     };
-  } catch (err: any) {
-    context.error(err);
+  } catch (error) {
+    context.error("EvaluateNorth error:", error);
+
     return {
       status: 500,
       jsonBody: {
-        error: "Internal error",
-        detail: String(err?.message || err)
+        ok: false,
+        error: "Internal server error"
       }
     };
   }
@@ -63,5 +52,5 @@ export async function EvaluateNorthHttp(
 app.http("EvaluateNorth", {
   methods: ["GET", "POST"],
   authLevel: "anonymous",
-  handler: EvaluateNorthHttp
+  handler: EvaluateNorth
 });

@@ -1,59 +1,50 @@
-export type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-export type Decision = "AUTO" | "APPROVAL" | "BLOCK";
+export type Environment = "dev" | "staging" | "prod";
+export type ActionType = "restart" | "deploy" | "delete" | "drop";
 
-export type RiskSignals = {
-  environment: string;
-  actionType: string;
+export type NorthPolicyDecision = "AUTO" | "APPROVAL" | "BLOCK";
+export type NorthRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export type NorthPolicyInput = {
+  env: Environment;
+  actionType: ActionType;
   reversible: boolean;
-  blastRadius: string;
-  governanceMissing: string[];
+  blastRadius: number; // 0..10 (recomendado), mas aceitamos qualquer number e clampamos no motor
+  governanceMissing: boolean;
 
-  // ✅ (opcionais, enterprise-ready — não quebra nada se não vier)
-  assetCriticality?: "TIER_0" | "TIER_1" | "TIER_2";
-  changeWindow?: "BUSINESS_HOURS" | "OFF_HOURS" | "FREEZE";
-  privilegeLevel?: "LOW" | "MEDIUM" | "HIGH";
+  // Permite evolução sem quebrar input (fields extras ignorados pela policy)
+  [k: string]: unknown;
 };
 
-export type RiskFactorBreakdown = {
-  factor:
-    | "environment"
-    | "actionType"
-    | "blastRadius"
-    | "reversible"
-    | "governanceMissing"
-    | "assetCriticality"
-    | "changeWindow"
-    | "privilegeLevel";
-  input: unknown;
-  severity: number; // 0..1
-  weight: number; // pontos
-  contribution: number; // pontos
-  rationale: string;
-};
+export type NorthPolicyResult = {
+  policyVersion: string;
 
-export type GuardrailHit = {
-  id: string;
-  effect: "REQUIRE_APPROVAL" | "BLOCK";
-  rationale: string;
-};
+  riskScore: number; // 0..100
+  riskLevel: NorthRiskLevel;
+  decision: NorthPolicyDecision;
 
-export type PolicyEvaluation = {
-  riskLevel: RiskLevel;
-  decision: Decision;
-
-  // 0..100 (quanto maior, mais arriscado)
-  riskScore: number;
-
-  // 0..1 (confiança do motor)
-  confidence: number;
-
+  confidence: number; // 0..1
   reasons: string[];
-  signals: RiskSignals;
 
-  // ✅ novos campos (opcionais) — backward compatible
-  policyVersion?: string;
-  riskModel?: string;
-  factorBreakdown?: RiskFactorBreakdown[];
-  guardrailHits?: GuardrailHit[];
-  synergyAdjustments?: { id: string; delta: number; rationale: string }[];
+  signals: Array<{
+    key: string;
+    value: unknown;
+    severity?: "info" | "warning" | "critical";
+  }>;
+
+  riskBreakdown: {
+    environment: number;
+    action: number;
+    blastRadius: number;
+    irreversible: number;
+    governanceMissing: number;
+    total: number;
+  };
+};
+
+export type EvaluateNorthResponse = {
+  ok: true;
+  requestId: string;
+  timestamp: string;
+  input: NorthPolicyInput;
+  policy: NorthPolicyResult;
 };
