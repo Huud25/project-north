@@ -1,0 +1,6 @@
+{
+    "environment": "dev",
+    "action": "restart",
+    "blastRadius": "low",
+    "irreversible": false
+  }

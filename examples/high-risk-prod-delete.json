@@ -1,0 +1,6 @@
+{
+    "environment": "prod",
+    "action": "delete",
+    "blastRadius": "high",
+    "irreversible": true
+  }
