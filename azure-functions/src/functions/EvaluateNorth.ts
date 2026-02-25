@@ -10,7 +10,6 @@ export async function EvaluateNorth(
   context: InvocationContext
 ): Promise<HttpResponseInit> {
   try {
-    // Body (unknown -> Record)
     let body: Record<string, unknown> = {};
     try {
       const raw = await request.json();
@@ -19,7 +18,6 @@ export async function EvaluateNorth(
       body = {};
     }
 
-    // Query params -> Record
     const query: Record<string, unknown> = {};
     request.query.forEach((value, key) => {
       query[key] = value;
@@ -30,7 +28,7 @@ export async function EvaluateNorth(
       ...body
     };
 
-    const result = evaluateNorth(input);
+    const result = await evaluateNorth(input);
 
     return {
       status: 200,

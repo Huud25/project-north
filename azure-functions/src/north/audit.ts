@@ -1,41 +1,84 @@
 import { BlobServiceClient } from "@azure/storage-blob";
+import crypto from "node:crypto";
+import { POLICY_CONFIG } from "./policy.config.js";
+import type { NorthPolicyInput, NorthPolicyResult } from "./types.js";
+import type { NorthAuditRecord } from "./audit.types.js";
 
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
+function getConnectionString(): string | undefined {
+  return process.env.AzureWebJobsStorage || process.env.AZURE_STORAGE_CONNECTION_STRING || process.env.NORTH_STORAGE_CONNECTION_STRING;
 }
 
-export async function recordAuditToBlob(params: {
-  auditId?: string;
-  input?: unknown;
-  env?: Record<string, unknown> | undefined;
-  actionType?: string;
-  evaluation?: unknown;
-}) {
-  const containerName = process.env.NORTH_AUDIT_CONTAINER || "north-audit";
+function getContainerName(): string {
+  return process.env.NORTH_AUDIT_CONTAINER || "north-audit";
+}
 
-  const conn = mustGetEnv("AzureWebJobsStorage");
-  const blobService = BlobServiceClient.fromConnectionString(conn);
-  const container = blobService.getContainerClient(containerName);
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
 
-  await container.createIfNotExists();
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `"${k}":${stableStringify(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
-  const auditId = params.auditId || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const blobName = `audits/${auditId}.json`;
-  const blob = container.getBlockBlobClient(blobName);
+export function computeDecisionId(policyVersion: string, input: NorthPolicyInput): string {
+  const payload = `${policyVersion}|${stableStringify(input)}`;
+  return crypto.createHash("sha256").update(payload).digest("hex").slice(0, 16);
+}
 
-  const record = {
-    audit_id: auditId,
-    timestamp: new Date().toISOString(),
-    input: params.input,
-    env: params.env,
-    type: params.actionType,
-    evaluation: params.evaluation
+function safeBlobName(createdAtIso: string, decisionId: string): string {
+  const ts = createdAtIso.replace(/[:.]/g, "-");
+  return `${ts}_${decisionId}.json`;
+}
+
+export async function writeAuditRecord(args: {
+  requestId: string;
+  createdAt: string;
+  input: NorthPolicyInput;
+  policy: NorthPolicyResult;
+}): Promise<{ ok: true; decisionId: string; blobName: string } | { ok: false; decisionId: string; error: string }> {
+  const decisionId = computeDecisionId(args.policy.policyVersion, args.input);
+
+  const conn = getConnectionString();
+  if (!conn) {
+    return {
+      ok: false,
+      decisionId,
+      error: "Missing storage connection string (AzureWebJobsStorage / AZURE_STORAGE_CONNECTION_STRING / NORTH_STORAGE_CONNECTION_STRING)."
+    };
+  }
+
+  const record: NorthAuditRecord = {
+    auditRecordVersion: "1.0",
+    decisionId,
+    requestId: args.requestId,
+    createdAt: args.createdAt,
+    policyVersion: args.policy.policyVersion,
+    strictProduction: Boolean((POLICY_CONFIG as unknown as { strictProduction?: boolean }).strictProduction),
+    input: args.input,
+    policy: args.policy,
+    meta: { source: "EvaluateNorth", runtime: "azure-functions" }
   };
 
-  const content = JSON.stringify(record, null, 2);
-  await blob.upload(content, Buffer.byteLength(content));
+  try {
+    const blobServiceClient = BlobServiceClient.fromConnectionString(conn);
+    const containerClient = blobServiceClient.getContainerClient(getContainerName());
+    await containerClient.createIfNotExists();
 
-  return { auditId, blobName };
+    const blobName = safeBlobName(args.createdAt, decisionId);
+    const blobClient = containerClient.getBlockBlobClient(blobName);
+
+    const content = JSON.stringify(record, null, 2);
+    await blobClient.upload(content, Buffer.byteLength(content), {
+      blobHTTPHeaders: { blobContentType: "application/json" }
+    });
+
+    return { ok: true, decisionId, blobName };
+  } catch (err) {
+    return { ok: false, decisionId, error: err instanceof Error ? err.message : String(err) };
+  }
 }

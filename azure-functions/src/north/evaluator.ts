@@ -1,4 +1,5 @@
 import { evaluatePolicy } from "./policy.js";
+import { writeAuditRecord } from "./audit.js";
 import type { EvaluateNorthResponse, NorthPolicyInput } from "./types.js";
 
 function isoNow(): string {
@@ -6,9 +7,11 @@ function isoNow(): string {
 }
 
 function makeRequestId(): string {
-  // determinístico não precisa aqui; requestId é só rastreio/observabilidade
-  // (não entra na policy, então não quebra determinismo do motor)
   return `north_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function toBoolean(v: unknown, defaultValue: boolean): boolean {
@@ -36,12 +39,8 @@ function toStringLower(v: unknown, defaultValue: string): string {
   return defaultValue;
 }
 
-/**
- * Normaliza entrada vinda do HTTP (body/query) para o tipo NorthPolicyInput
- * sem deixar TypeScript explodir e sem “inventar” campos.
- */
 export function normalizeInput(raw: unknown): NorthPolicyInput {
-  const obj = (raw ?? {}) as Record<string, unknown>;
+  const obj: Record<string, unknown> = isPlainObject(raw) ? raw : {};
 
   const env = toStringLower(obj.env, "dev") as NorthPolicyInput["env"];
   const actionType = toStringLower(obj.actionType, "restart") as NorthPolicyInput["actionType"];
@@ -50,7 +49,6 @@ export function normalizeInput(raw: unknown): NorthPolicyInput {
   const blastRadius = toNumber(obj.blastRadius, 0);
   const governanceMissing = toBoolean(obj.governanceMissing, false);
 
-  // mantém campos extras para auditoria/debug, mas o motor ignora o que não usa
   return {
     ...obj,
     env,
@@ -61,17 +59,30 @@ export function normalizeInput(raw: unknown): NorthPolicyInput {
   } as NorthPolicyInput;
 }
 
-/**
- * Monta a resposta final do endpoint (estrutura estável, enterprise).
- */
-export function evaluateNorth(rawInput: unknown): EvaluateNorthResponse {
+export async function evaluateNorth(rawInput: unknown): Promise<EvaluateNorthResponse> {
+  const requestId = makeRequestId();
+  const createdAt = isoNow();
+
   const input = normalizeInput(rawInput);
   const policy = evaluatePolicy(input);
 
+  // Auditoria: não derruba o endpoint, mas agora loga o resultado
+  writeAuditRecord({ requestId, createdAt, input, policy })
+    .then((res) => {
+      if (res.ok) {
+        console.log(`[north-audit] written blob=${res.blobName} decisionId=${res.decisionId}`);
+      } else {
+        console.error(`[north-audit] FAILED decisionId=${res.decisionId} error=${res.error}`);
+      }
+    })
+    .catch((err) => {
+      console.error("[north-audit] FAILED with exception:", err);
+    });
+
   return {
     ok: true,
-    requestId: makeRequestId(),
-    timestamp: isoNow(),
+    requestId,
+    timestamp: createdAt,
     input,
     policy
   };

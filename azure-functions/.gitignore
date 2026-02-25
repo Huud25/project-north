@@ -51,3 +51,11 @@ __azurite_db*__.json
 
 # Azurite local files
 azure-functions/.azurite/
+
+# Azurite (ignore in any folder)
+.azurite/
+**/.azurite/
+**/.azurite/**
+
+# Azurite logs
+*.log
