@@ -18,14 +18,24 @@ export async function EvaluateNorth(
       body = {};
     }
 
+    // query params (strings)
     const query: Record<string, unknown> = {};
     request.query.forEach((value, key) => {
       query[key] = value;
     });
 
+    // Support payloads:
+    // 1) { environment, action, ... }
+    // 2) { change: { environment, action, ... } }
+    const changeFromBody =
+      isPlainObject(body.change) ? (body.change as Record<string, unknown>) : null;
+
+    // Merge order (later wins):
+    // query -> body -> body.change
     const input: Record<string, unknown> = {
       ...query,
-      ...body
+      ...body,
+      ...(changeFromBody ?? {})
     };
 
     const result = await evaluateNorth(input);
