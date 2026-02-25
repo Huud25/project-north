@@ -39,29 +39,26 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function getEnvScore(env: string | undefined): number {
+function getEnvScore(env?: string): number {
   const e = (env ?? "").toLowerCase();
-  const map = POLICY_CONFIG.environmentScores as Record<string, number>;
-  return map[e] ?? 0;
+  return POLICY_CONFIG.environmentScores[e as keyof typeof POLICY_CONFIG.environmentScores] ?? 0;
 }
 
-function getActionScore(actionType: string | undefined): number {
+function getActionScore(actionType?: string): number {
   const a = (actionType ?? "").toLowerCase();
-  const map = POLICY_CONFIG.actionScores as Record<string, number>;
-  return map[a] ?? 0;
+  return POLICY_CONFIG.actionScores[a as keyof typeof POLICY_CONFIG.actionScores] ?? 0;
 }
 
-function getBlastRadiusScore(blastRadius: number | undefined): number {
+function getBlastRadiusScore(blastRadius?: number): number {
   const br = typeof blastRadius === "number" ? blastRadius : 0;
-  const raw = br * POLICY_CONFIG.blastRadius.multiplier;
-  return clamp(raw, 0, POLICY_CONFIG.blastRadius.maxScore);
+  return clamp(br * POLICY_CONFIG.blastRadius.multiplier, 0, POLICY_CONFIG.blastRadius.maxScore);
 }
 
-function getIrreversibleScore(reversible: boolean | undefined): number {
+function getIrreversibleScore(reversible?: boolean): number {
   return reversible ? 0 : POLICY_CONFIG.penalties.irreversible;
 }
 
-function getGovernanceMissingScore(governanceMissing: boolean | undefined): number {
+function getGovernanceMissingScore(governanceMissing?: boolean): number {
   return governanceMissing ? POLICY_CONFIG.penalties.governanceMissing : 0;
 }
 
@@ -73,128 +70,51 @@ function getRiskLevel(score: number): NorthRiskLevel {
 }
 
 function getDecision(
-  riskLevel: NorthRiskLevel,
-  governanceMissing: boolean | undefined,
-  env: string | undefined
+  input: NorthPolicyInput,
+  riskLevel: NorthRiskLevel
 ): NorthPolicyDecision {
-  const e = (env ?? "").toLowerCase();
 
-  if (e === "prod" && governanceMissing) {
-    if (riskLevel === "LOW") return "APPROVAL";
-    return "BLOCK";
+  const env = (input.env ?? "").toLowerCase();
+
+  // 🔒 STRICT MODE FOR PRODUCTION
+  if (POLICY_CONFIG.strictProduction && env === "prod") {
+    if (riskLevel === "CRITICAL") return "BLOCK";
+    if (riskLevel === "HIGH") return "APPROVAL";
+    if (input.reversible === false) return "APPROVAL";
+    if (input.governanceMissing) return "BLOCK";
   }
 
+  // Default logic
   if (riskLevel === "CRITICAL") return "BLOCK";
   if (riskLevel === "HIGH") return "APPROVAL";
   if (riskLevel === "MEDIUM") return "APPROVAL";
   return "AUTO";
 }
 
-function getConfidence(score: number, riskLevel: NorthRiskLevel, governanceMissing: boolean | undefined): number {
+function getConfidence(score: number, riskLevel: NorthRiskLevel): number {
   const extremity = Math.abs(score - 50) / 50;
   const base =
     riskLevel === "CRITICAL" || riskLevel === "LOW"
       ? 0.85 + 0.1 * extremity
       : 0.75 + 0.1 * extremity;
 
-  const penalty = governanceMissing ? 0.12 : 0;
-  return clamp(round2(base - penalty), 0.5, 0.99);
+  return clamp(round2(base), 0.5, 0.99);
 }
 
-function classifyBlastRadius(blastRadius: number | undefined): "low" | "moderate" | "high" {
-  const br = typeof blastRadius === "number" ? blastRadius : 0;
-  if (br >= 7) return "high";
-  if (br >= 4) return "moderate";
-  return "low";
-}
-
-function isDestructiveAction(actionType: string | undefined): boolean {
-  const a = (actionType ?? "").toLowerCase();
-  return a === "delete" || a === "drop";
-}
-
-function buildExecutiveSummary(input: NorthPolicyInput, result: { riskScore: number; riskLevel: NorthRiskLevel; decision: NorthPolicyDecision }): string {
+function buildExecutiveSummary(
+  input: NorthPolicyInput,
+  riskScore: number,
+  riskLevel: NorthRiskLevel,
+  decision: NorthPolicyDecision
+): string {
   const env = (input.env ?? "unknown").toLowerCase();
   const action = (input.actionType ?? "unknown").toLowerCase();
-  const brClass = classifyBlastRadius(input.blastRadius);
-  const destructive = isDestructiveAction(input.actionType);
 
-  const parts: string[] = [];
-
-  parts.push(`This change has been classified as ${result.riskLevel} risk (score ${result.riskScore}/100).`);
-
-  // Linha 2: contexto de ambiente + ação
-  if (env === "prod") {
-    parts.push("The operation targets a production environment, increasing operational exposure.");
-  } else if (env === "staging") {
-    parts.push("The operation targets a staging environment with moderate operational exposure.");
-  } else if (env === "dev") {
-    parts.push("The operation targets a development environment with reduced operational exposure.");
-  } else {
-    parts.push("The target environment could not be validated and may increase uncertainty.");
-  }
-
-  // Linha 3: ação + blast radius + reversibilidade + governança
-  const line3: string[] = [];
-
-  if (destructive) {
-    line3.push(`It includes a destructive action (“${action}”)`);
-  } else {
-    line3.push(`It includes an operational action (“${action}”)`);
-  }
-
-  if (brClass === "high") line3.push("with elevated blast radius");
-  if (brClass === "moderate") line3.push("with moderate blast radius");
-  if (brClass === "low") line3.push("with limited blast radius");
-
-  if (input.reversible === false) line3.push("and is marked as irreversible");
-  if (input.governanceMissing) line3.push("with missing governance controls");
-
-  // Finaliza linha 3 com ponto
-  parts.push(`${line3.join(" ")}.`);
-
-  // Linha 4: decisão
-  if (result.decision === "AUTO") {
-    parts.push("Decision: eligible for automatic execution under current governance thresholds.");
-  } else if (result.decision === "APPROVAL") {
-    parts.push("Decision: requires approval before execution under current governance thresholds.");
-  } else {
-    parts.push("Decision: blocked under current governance thresholds.");
-  }
-
-  return parts.join(" ");
-}
-
-function buildReasons(input: NorthPolicyInput, riskLevel: NorthRiskLevel, breakdown: NorthPolicyResult["riskBreakdown"]): string[] {
-  const reasons: string[] = [];
-
-  const env = (input.env ?? "").toLowerCase();
-  const action = (input.actionType ?? "").toLowerCase();
-
-  if (env === "prod") reasons.push("Ambiente de produção aumenta o risco.");
-  if (action === "drop" || action === "delete") reasons.push("Ação destrutiva aumenta o risco.");
-  if (input.reversible === false) reasons.push("Mudança irreversível aumenta o risco.");
-  if ((input.blastRadius ?? 0) >= 6) reasons.push("Blast radius alto indica grande impacto potencial.");
-  if (input.governanceMissing) reasons.push("Controles de governança ausentes aumentam o risco e reduzem confiança.");
-
-  reasons.push(`Score final: ${breakdown.total}/100 (${riskLevel}).`);
-
-  return reasons;
-}
-
-function buildSignals(input: NorthPolicyInput, decision: NorthPolicyDecision, riskLevel: NorthRiskLevel): NorthPolicyResult["signals"] {
-  const env = (input.env ?? "").toLowerCase();
-  const action = (input.actionType ?? "").toLowerCase();
-
-  return [
-    { key: "env", value: env, severity: env === "prod" ? "warning" : "info" },
-    { key: "actionType", value: action, severity: action === "drop" || action === "delete" ? "warning" : "info" },
-    { key: "reversible", value: !!input.reversible, severity: input.reversible ? "info" : "warning" },
-    { key: "blastRadius", value: input.blastRadius ?? 0, severity: (input.blastRadius ?? 0) >= 6 ? "warning" : "info" },
-    { key: "governanceMissing", value: !!input.governanceMissing, severity: input.governanceMissing ? "critical" : "info" },
-    { key: "riskLevel", value: riskLevel, severity: riskLevel === "CRITICAL" ? "critical" : riskLevel === "HIGH" ? "warning" : "info" },
-    { key: "decision", value: decision, severity: decision === "BLOCK" ? "critical" : decision === "APPROVAL" ? "warning" : "info" }
-  ];
+  return `
+This change has been classified as ${riskLevel} risk (score ${riskScore}/100).
+The operation targets the ${env} environment and includes action "${action}".
+Decision: ${decision} under current governance thresholds.
+  `.trim().replace(/\s+/g, " ");
 }
 
 export function evaluatePolicy(input: NorthPolicyInput): NorthPolicyResult {
@@ -213,7 +133,7 @@ export function evaluatePolicy(input: NorthPolicyInput): NorthPolicyResult {
 
   const riskScore = clamp(Math.round(weighted), 0, 100);
   const riskLevel = getRiskLevel(riskScore);
-  const decision = getDecision(riskLevel, input.governanceMissing, input.env);
+  const decision = getDecision(input, riskLevel);
 
   const riskBreakdown = {
     environment: envScore,
@@ -224,11 +144,9 @@ export function evaluatePolicy(input: NorthPolicyInput): NorthPolicyResult {
     total: riskScore
   };
 
-  const confidence = getConfidence(riskScore, riskLevel, input.governanceMissing);
-  const reasons = buildReasons(input, riskLevel, riskBreakdown);
-  const signals = buildSignals(input, decision, riskLevel);
+  const confidence = getConfidence(riskScore, riskLevel);
 
-  const summary = buildExecutiveSummary(input, { riskScore, riskLevel, decision });
+  const summary = buildExecutiveSummary(input, riskScore, riskLevel, decision);
 
   return {
     policyVersion: POLICY_CONFIG.policyVersion,
@@ -237,8 +155,8 @@ export function evaluatePolicy(input: NorthPolicyInput): NorthPolicyResult {
     decision,
     confidence,
     summary,
-    reasons,
-    signals,
+    reasons: [],
+    signals: [],
     riskBreakdown
   };
 }

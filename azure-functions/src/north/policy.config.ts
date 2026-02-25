@@ -1,7 +1,8 @@
 export const POLICY_CONFIG = {
-    policyVersion: "1.1.0",
+    policyVersion: "1.2.0",
   
-    // Pesos somam 1.0 (modelo ponderado enterprise)
+    strictProduction: true, // 🔒 novo modo strict configurável
+  
     weights: {
       environment: 0.25,
       action: 0.25,
@@ -10,14 +11,12 @@ export const POLICY_CONFIG = {
       governanceMissing: 0.15
     },
   
-    // Severidade base por ambiente (0..100)
     environmentScores: {
       dev: 10,
       staging: 40,
       prod: 80
     },
   
-    // Severidade base por ação (0..100)
     actionScores: {
       restart: 20,
       deploy: 50,
@@ -25,19 +24,16 @@ export const POLICY_CONFIG = {
       drop: 90
     },
   
-    // Blast radius: multiplicador simples (ex: blastRadius=7 -> 70)
     blastRadius: {
       multiplier: 10,
       maxScore: 100
     },
   
-    // Penalidades (0..100)
     penalties: {
       irreversible: 70,
       governanceMissing: 60
     },
   
-    // Thresholds do risk level (baseado no score final 0..100)
     thresholds: {
       LOW: 0,
       MEDIUM: 30,
